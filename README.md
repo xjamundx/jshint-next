@@ -16,6 +16,10 @@ agreed to use:
  * Tests: Nodeunit(https://github.com/caolan/nodeunit) and
 		[Coveraje](https://github.com/coveraje/coveraje).
 
+Examples
+--------
+
+You can run the examples by typing `grunt examples`.
 
 Discussion
 ----------
