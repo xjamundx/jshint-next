@@ -1,0 +1,10 @@
+var awesome
+awesome = [];
+
+// globals, loop funcs, missing semis, oh my
+for (i = 0; i < awesom.length; i++) {
+  // super bad example
+  setTimeout(function() {
+    console.log(i);
+  }, 10)
+}
