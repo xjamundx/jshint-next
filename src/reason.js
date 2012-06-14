@@ -4,19 +4,17 @@ var _ = require("underscore");
 var utils = require("./utils.js");
 var constants = require("./constants.js");
 
-var report, program, scopes;
+var report, program, scopes, tokens;
 
 // Check for trailing commas in arrays and objects.
 
 function trailingComma(expr) {
-	var tokens = utils.getRange(program.tokens, expr.range);
-	var token = tokens[tokens.length - 2];
+	var token = tokens.move(tokens.find(expr.range[1] - 2));
 
 	if (_.all([token.type === "Punctuator", token.value === "," ], _.identity)) {
 		report.addError(constants.errors.TrailingComma, token.range);
 	}
 }
-
 
 // Check for properties named __iterator__. This is a special property
 // available only in browsers with JavaScript 1.7 implementation.
@@ -29,7 +27,6 @@ function dunderIterator(expr) {
 	}
 }
 
-
 // Check for properties named __proto__. This special property was
 // deprecated long time ago.
 
@@ -41,7 +38,6 @@ function dunderProto(expr) {
 	}
 }
 
-
 // Check for missing semicolons but only when they have a potential
 // of breaking things due to automatic semicolon insertion.
 
@@ -51,43 +47,45 @@ function missingSemicolon(expr) {
 	if (type !== "CallExpression" && type !== "MemberExpression")
 		return;
 
-	var tokens = utils.getRange(program.tokens, expr.range);
-	_.each(tokens, function (token, i) {
-		if (i === 0)
-			return;
+	var slice = tokens.getRange(expr.range);
+	var token = slice.move(1);
+	var prev, curLine, prevLine;
 
-		if (!utils.isPunctuator(token, "(") && !utils.isPunctuator(token, "["))
-			return;
+	while (token !== null) {
+		if (utils.isPunctuator(token, "(") || utils.isPunctuator(token, "[")) {
+			prev = slice.peak(-1);
+			curLine = report.lineFromRange(token.range);
+			prevLine = report.lineFromRange(prev.range);
 
-		var prev = tokens[i - 1];
-		var tokenLine = report.lineFromRange(token.range);
-		var prevLine = report.lineFromRange(prev.range);
-
-		if (tokenLine === prevLine)
-			return;
-
-		if (!utils.isPunctuator(prev, ";")) {
-			report.addError(constants.errors.MissingSemicolon, prev.range);
+			if (curLine !== prevLine && !utils.isPunctuator(prev, ";")) {
+				report.addError(constants.errors.MissingSemicolon, prev.range);
+			}
 		}
-	});
+
+		token = slice.next();
+	}
 }
 
+// Catch cases where you put a new line after a `return` statement
+// by mistake.
+
 function missingReturnSemicolon(expr) {
-	var tokens = utils.getRange(program.tokens, expr.range, 2);
+	var cur = tokens.move(tokens.find(expr.range[0]));
+	var next = tokens.peak();
 
-	if (report.lineFromRange(tokens[1].range) === report.lineFromRange(tokens[0].range))
+	if (report.lineFromRange(next.range) === report.lineFromRange(cur.range))
 		return;
 
-	if (tokens[1] && utils.isPunctuator(tokens[1], ";"))
+	if (next && utils.isPunctuator(next, ";"))
 		return;
 
-	if (tokens[1] && utils.isKeyword(tokens[1], "var"))
+	if (next && utils.isKeyword(next, "var"))
 		return;
 
-	if (tokens[1] && utils.isKeyword(tokens[1], "case"))
+	if (next && utils.isKeyword(next, "case"))
 		return;
 
-	report.addError(constants.errors.MissingSemicolon, tokens[0].range);
+	report.addError(constants.errors.MissingSemicolon, cur.range);
 }
 
 // Check for debugger statements. You really don't want them in your
@@ -97,6 +95,8 @@ function unexpectedDebugger(expr) {
 	report.addError(constants.errors.DebuggerStatement, expr.range);
 }
 
+// Disallow bitwise operators: they are slow in JavaScript and
+// more often than not are simply typoed logical operators.
 
 function bitwiseOperators(expr) {
 	var ops = {
@@ -113,6 +113,9 @@ function bitwiseOperators(expr) {
 		report.addError(constants.warnings.BitwiseOperator, expr.range);
 	}
 }
+
+// Complain about comparisons that can blow up because of type
+// coercion.
 
 function unsafeComparison(expr) {
 	function isUnsafe(el) {
@@ -141,9 +144,51 @@ function unsafeComparison(expr) {
 		report.addError(constants.warnings.UnsafeComparison, expr.right.range);
 }
 
+// Complain about variables defined twice.
+
 function redefinedVariables(name, range) {
 	if (scopes.isDefined(name))
 		report.addError(constants.warnings.RedefinedVariable, range);
+}
+
+// Check if identifier is a free variable and record its
+// use. Later in the code we'll use that to spot undefined
+// variables.
+
+function recordIdentifier(ident) {
+	var index = tokens.find(ident.range[0]);
+	var token, prev, next;
+
+	if (index > 0) {
+		token = tokens.move(index);
+		prev  = tokens.peak(-1);
+		next  = tokens.peak(1) || {};
+
+		// This identifier is a property key, not a free variable.
+
+		if (utils.isPunctuator(next, ":") && !utils.isPunctuator(prev, "?"))
+			return;
+
+		// This identifier is a property itself, not a free variable.
+
+		if (utils.isPunctuator(prev, "."))
+			return;
+
+		// Operators typeof and delete do not raise runtime errors
+		// even if the base object of a reference is null, so we don't
+		// need to display warnings in these cases.
+
+		if (utils.isKeyword(prev, "typeof") || utils.isKeyword(prev, "delete")) {
+
+			// Unless you're trying to subscript a null references. That
+			// will throw a runtime error.
+
+			if (!utils.isPunctuator(next, ".") && !utils.isPunctuator(next, "["))
+				return;
+		}
+	}
+
+	scopes.addUse(ident.name, ident.range);
 }
 
 // Walk the tree using recursive depth-first search and call
@@ -179,19 +224,18 @@ function parse(tree) {
 		break;
 	case "VariableDeclarator":
 		redefinedVariables(tree.id.name, tree.id.range);
-		scopes.addVariable(tree.id.name);
+		scopes.addVariable({ name: tree.id.name });
 		break;
 	case "FunctionExpression":
 	case "FunctionDeclaration":
-		if (tree.id && tree.id.name) {
-			redefinedVariables(tree.id.name, tree.id.range);
-			scopes.addVariable(tree.id.name);
-		}
-
 		_.each(tree.params, function (param, key) {
 			redefinedVariables(param.name, param.range);
-			scopes.addVariable(param.name);
+			scopes.addVariable({ name: param.name });
 		});
+		break;
+	case "Identifier":
+		recordIdentifier(tree);
+		break;
 	}
 
 	_.each(tree, function (val, key) {
@@ -203,14 +247,26 @@ function parse(tree) {
 
 		switch (val.type) {
 		case "FunctionDeclaration":
+			scopes.addVariable({ name: val.id.name });
 			scopes.push(val.id.name);
 			parse(val);
 			scopes.pop();
 			break;
 		case "FunctionExpression":
+			if (val.id && val.id.type === "Identifier")
+				scopes.addVariable({ name: val.id.name });
+
 			scopes.push("(anon)");
 			parse(val);
 			scopes.pop();
+			break;
+		case "WithStatement":
+			scopes.runtimeOnly = true;
+			parse(val);
+			scopes.runtimeOnly = false;
+			break;
+		case "Identifier":
+			parse(val);
 			break;
 		default:
 			parse(val);
@@ -218,10 +274,18 @@ function parse(tree) {
 	});
 }
 
-exports.parse = function (tree, source) {
-	report  = new utils.Report(source);
+exports.parse = function (opts) {
+	report  = new utils.Report(opts.code);
 	scopes  = new utils.ScopeStack();
-	program = tree;
+	program = opts.tree;
+	tokens  = new utils.Tokens(program.tokens);
+
+	_.each(opts.predefined || {}, function (writeable, name) {
+		scopes.addGlobalVariable({
+			name: name,
+			writeable: writeable
+		});
+	});
 
 	if (program.errors.length) {
 		program.errors.forEach(function (err) {
@@ -231,5 +295,20 @@ exports.parse = function (tree, source) {
 	}
 
 	parse(program.body);
+
+	// Go over all stacks and find all variables that were used
+	// but never defined.
+
+	_.each(scopes.stack, function (env) {
+		_.each(env.uses, function (ranges, name) {
+			if (scopes.isDefined(name, env))
+				return;
+
+			_.each(ranges, function (range) {
+				report.addError(constants.warnings.UndefinedVariable, range);
+			});
+		});
+	});
+
 	return report;
 };

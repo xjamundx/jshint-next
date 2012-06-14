@@ -42,49 +42,44 @@ exports.testMixin = function (test) {
 	test.done();
 };
 
-exports.getRange = function (test) {
+exports.testTokens = function (test) {
 	var code = fixtures.get("simple_file.js");
-	var tokens = linter.lint({ code: code }).tree.tokens;
+	var tokens = new utils.Tokens(linter.lint({ code: code }).tree.tokens);
+	var slice = tokens.getRange([ 0, 27 ]);
 
-	var slice = utils.getRange(tokens, [ 0, 27 ]);
 	test.equal(slice.length, 3);
-	test.equal(slice[0].value, "var");
-	test.equal(slice[1].value, "number");
-	test.equal(slice[2].value, "=");
-
-	slice = utils.getRange(tokens, [ 84, 84 ], 2);
-	test.equal(slice.length, 2);
-	test.equal(slice[0].value, ")");
-	test.equal(slice[1].value, ";");
+	test.equal(slice.current.value, "var");
+	test.equal(slice.next().value, "number");
+	test.equal(slice.next().value, "=");
 
 	test.done();
 };
 
 exports.testScopeStack = function (test) {
 	var scope = new utils.ScopeStack();
-	test.equal(scope.length, 1);
-	test.equal(scope.getCurrent().name, "(global)");
+	test.equal(scope.current.name, "(global)");
 
-	scope.addVariable("weebly");
+	scope.addVariable({ name: "weebly" });
 	test.ok(scope.isDefined("weebly"));
 
 	scope.push("(anon)");
-	test.equal(scope.length, 2);
-	test.equal(scope.getCurrent().name, "(anon)");
+	test.equal(scope.current.name, "(anon)");
 
-	scope.addVariable("wobly");
+	scope.addVariable({ name: "wobly" });
 	test.ok(scope.isDefined("wobly"));
 	test.ok(scope.isDefined("weebly"));
 
-	scope.addGlobalVariable("stuff");
+	scope.addGlobalVariable({ name: "stuff" });
 	test.ok(scope.isDefined("stuff"));
 
 	scope.pop();
-	test.equal(scope.length, 1);
-	test.equal(scope.getCurrent().name, "(global)");
+	test.equal(scope.current.name, "(global)");
 	test.ok(scope.isDefined("weebly"));
 	test.ok(scope.isDefined("stuff"));
 	test.ok(!scope.isDefined("wobly"));
+
+	scope.addGlobalVariable({ name: "__proto__" });
+	test.ok(scope.isDefined("__proto__"));
 
 	test.done();
 };
