@@ -63,7 +63,8 @@ var warnings = {
 	W005: "Avoid arguments.caller.",
 	W006: "Avoid arguments.callee.",
 	W007: "Object arguments outside of a function body.",
-	W008: "Assignment instead of a conditionial expression. (typo?)"
+	W008: "Assignment instead of a conditionial expression. (typo?)",
+	W009: "Don't extend built-ins"
 };
 
 exports.errors = {};

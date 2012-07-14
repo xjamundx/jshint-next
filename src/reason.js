@@ -2,6 +2,7 @@
 
 var _ = require("underscore");
 var utils = require("./utils.js");
+var constants = require('./constants');
 
 exports.register = function (linter) {
 	var report = linter.report;
@@ -245,6 +246,25 @@ exports.register = function (linter) {
 	linter.on("ForStatement IfStatement WhileStatement DoWhileStatement", function (expr) {
 		if (expr.test && expr.test.type === "AssignmentExpression")
 			report.addWarning("W008", expr.range);
+	});
+	
+	// Warn when extending prototypes of built-in types
+	linter.on("AssignmentExpression", function (expr) {
+		var left = expr.left;
+		var obj = left.object;
+	
+		function isNativeProto(expr) {
+			if (!expr.property || !expr.object) return;
+			return expr.object.name in constants.ecmaIdentifiers && expr.property.name === "prototype";
+		}
+
+		if (left.type !== "MemberExpression") return;
+
+		// Check for Object.prototype.prop = ""
+		// Check for Native.prototype = {}
+		if (isNativeProto(left) || isNativeProto(obj))
+			report.addWarning("W009", expr.range);
+
 	});
 
 	// Go over all stacks and find all variables that were used but
